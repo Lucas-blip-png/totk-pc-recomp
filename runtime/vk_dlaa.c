@@ -9,12 +9,14 @@
 // layout with a set-then-get round trip before anything relies on it.
 //
 // Where DLAA runs in the frame, the jitter and the motion vectors: see the sections below.
+#ifdef _WIN32
 #include <windows.h>
+#include <wchar.h>
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <wchar.h>
 
 #include "cfg.h"
 #include "host.h"
@@ -57,7 +59,9 @@ typedef NgxResult (*PFN_Evaluate)(VkCommandBuffer, const NgxHandle *, const NgxP
 typedef NgxResult (*PFN_Release)(NgxHandle *);
 
 static struct {
+#ifdef _WIN32
     HMODULE core;
+#endif
     PFN_Init init;
     PFN_ReqExt req_ext;
     PFN_Params caps, alloc_params;
@@ -92,6 +96,9 @@ static int p_getp(const NgxParam *p, const char *n, void **v) { return NGX_OK(((
 int vk_dlaa_wanted(void) { return 1; }
 
 static int core_load(void) {
+#ifndef _WIN32
+    return 0;   // NGX is a Windows DLL: on Linux the DLAA point runs FSR 3.1 only (aa_engine=fsr3)
+#else
     if (N.tried) return N.loaded;
     N.tried = 1;
     char dir[MAX_PATH] = {0}, path[MAX_PATH + 32];
@@ -124,6 +131,7 @@ static int core_load(void) {
     N.loaded = 1;
     rt_log("dlaa: NGX core %s", path);
     return 1;
+#endif
 }
 
 static int listed(const char *const *list, uint32_t n, const char *s) {
@@ -172,6 +180,12 @@ static int vtable_ok(void) {
 }
 
 void vk_dlaa_init(void) {
+#ifndef _WIN32
+    N.available = 0;   // no NGX: engine_fsr() takes FSR 3.1 when the build has it
+    if (vk_dlaa_wanted() && fsr3_available())
+        rt_log("dlaa: NGX is Windows-only; DLAA runs FSR 3.1 here (aa_engine=fsr3)");
+    return;
+#else
     if (!vk_dlaa_wanted() || !core_load()) return;
     wchar_t wdir[MAX_PATH];
     DWORD len = GetModuleFileNameW(NULL, wdir, MAX_PATH);
@@ -195,6 +209,7 @@ void vk_dlaa_init(void) {
     N.available = avail != 0;
     rt_log("dlaa: NGX up; DLSS %s%s", avail ? "available" : "NOT available (is nvngx_dlss.dll next to totk.exe?)",
            driver ? "; the driver needs an update" : "");
+#endif
 }
 
 // ---------------------------------------------------------------- where DLAA runs in TotK's frame
@@ -260,6 +275,9 @@ static int dl_active(void) { return !D.failed && D.on; }
 // (fsr3_available) always takes DLSS.
 static int engine_fsr(void) {
     if (!fsr3_available()) return 0;
+#ifndef _WIN32
+    return 1;   // no NGX here: FSR 3.1 is the only engine at the DLAA point
+#endif
     const char *e = cfg_value("TOTK_AA_ENGINE");
     if (!strcmp(e, "fsr3")) return 1;
     if (!strcmp(e, "dlss")) return 0;
